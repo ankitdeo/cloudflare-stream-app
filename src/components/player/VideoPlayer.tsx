@@ -13,6 +13,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { formatTime } from "@/lib/utils";
 import { Video } from "@/types/stream";
+import Hls from "hls.js";
 
 interface VideoPlayerProps {
   video: Video;
@@ -35,6 +36,71 @@ export default function VideoPlayer({ video, autoPlay = false }: VideoPlayerProp
   const [isDragging, setIsDragging] = useState(false);
 
   const controlsTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const hlsRef = useRef<Hls | null>(null);
+
+  // Initialize HLS player for HLS streams
+  useEffect(() => {
+    const videoElement = videoRef.current;
+    const playbackUrl = video.playback?.hls;
+    
+    if (!videoElement || !playbackUrl) return;
+
+    // Check if browser supports HLS natively (Safari)
+    if (videoElement.canPlayType("application/vnd.apple.mpegurl")) {
+      videoElement.src = playbackUrl;
+      return;
+    }
+
+    // Use hls.js for other browsers
+    if (Hls.isSupported()) {
+      const hls = new Hls({
+        enableWorker: true,
+        lowLatencyMode: false,
+      });
+
+      hls.loadSource(playbackUrl);
+      hls.attachMedia(videoElement);
+
+      hls.on(Hls.Events.MANIFEST_PARSED, () => {
+        console.log("HLS manifest parsed, video ready");
+        if (autoPlay) {
+          videoElement.play().catch((err) => {
+            console.error("Autoplay failed:", err);
+          });
+        }
+      });
+
+      hls.on(Hls.Events.ERROR, (event, data) => {
+        if (data.fatal) {
+          switch (data.type) {
+            case Hls.ErrorTypes.NETWORK_ERROR:
+              console.error("HLS network error, trying to recover");
+              hls.startLoad();
+              break;
+            case Hls.ErrorTypes.MEDIA_ERROR:
+              console.error("HLS media error, trying to recover");
+              hls.recoverMediaError();
+              break;
+            default:
+              console.error("HLS fatal error, destroying instance");
+              hls.destroy();
+              break;
+          }
+        }
+      });
+
+      hlsRef.current = hls;
+
+      return () => {
+        if (hlsRef.current) {
+          hlsRef.current.destroy();
+          hlsRef.current = null;
+        }
+      };
+    } else {
+      console.error("HLS is not supported in this browser");
+    }
+  }, [video.playback?.hls, autoPlay]);
 
   // Update current time
   useEffect(() => {
@@ -283,12 +349,12 @@ export default function VideoPlayer({ video, autoPlay = false }: VideoPlayerProp
     >
       <video
         ref={videoRef}
-        src={playbackUrl}
         className="w-full h-full"
         autoPlay={autoPlay}
         playsInline
         onPlay={() => setIsPlaying(true)}
         onPause={() => setIsPlaying(false)}
+        // Don't set src directly - hls.js will handle it
       />
 
       {isLoading && (

@@ -4,7 +4,10 @@ import { Video } from "@/types/stream";
 
 export async function GET() {
   try {
+    console.log("Fetching videos from Cloudflare Stream...");
     const videos = await listVideos();
+    
+    console.log(`Retrieved ${videos.length} videos from Cloudflare`);
     
     // Enhance videos with playback URLs if not already present
     const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -24,11 +27,12 @@ export async function GET() {
     return NextResponse.json({ success: true, data: enhancedVideos });
   } catch (error) {
     console.error("Error listing videos:", error);
+    const errorMessage = error instanceof Error ? error.message : "Failed to list videos";
+    console.error("Error details:", errorMessage);
     return NextResponse.json(
       {
         success: false,
-        error:
-          error instanceof Error ? error.message : "Failed to list videos",
+        error: errorMessage,
       },
       { status: 500 }
     );

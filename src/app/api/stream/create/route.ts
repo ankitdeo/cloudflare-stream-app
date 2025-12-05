@@ -8,7 +8,7 @@ export async function POST(request: NextRequest) {
 
     if (type === "direct") {
       // Create direct upload URL for file upload
-      const uploadData = await createDirectUpload();
+      const uploadData = await createDirectUpload(meta);
       return NextResponse.json({ success: true, data: uploadData });
     } else if (type === "live") {
       // Create live input for streaming

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getVideo } from "@/lib/cloudflare";
+import { getVideo, deleteVideo } from "@/lib/cloudflare";
 
 export async function GET(
   request: NextRequest,
@@ -25,6 +25,33 @@ export async function GET(
       {
         success: false,
         error: error instanceof Error ? error.message : "Failed to get video",
+      },
+      { status: 500 }
+    );
+  }
+}
+
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  try {
+    const { id } = await params;
+    console.log(`Deleting video: ${id}`);
+    await deleteVideo(id);
+    console.log(`Video ${id} deleted successfully`);
+    
+    return NextResponse.json({ 
+      success: true, 
+      message: "Video deleted successfully" 
+    });
+  } catch (error) {
+    console.error("Error deleting video:", error);
+    const errorMessage = error instanceof Error ? error.message : "Failed to delete video";
+    return NextResponse.json(
+      {
+        success: false,
+        error: errorMessage,
       },
       { status: 500 }
     );

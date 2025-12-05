@@ -34,18 +34,42 @@ async function cloudflareRequest<T>(
     );
   }
 
-  const data = await response.json();
-  return data.result || data;
+  // Handle empty responses (e.g., DELETE requests with 204 No Content)
+  const contentType = response.headers.get("content-type");
+  const contentLength = response.headers.get("content-length");
+  
+  // If no content or empty body, return empty object/void
+  if (response.status === 204 || contentLength === "0" || !contentType?.includes("application/json")) {
+    return {} as T;
+  }
+
+  // Try to parse JSON, but handle empty responses gracefully
+  const text = await response.text();
+  if (!text || text.trim() === "") {
+    return {} as T;
+  }
+
+  try {
+    const data = JSON.parse(text);
+    return data.result || data;
+  } catch (e) {
+    // If JSON parsing fails but status is OK, return empty object
+    if (response.ok) {
+      return {} as T;
+    }
+    throw new Error(`Failed to parse response: ${text.substring(0, 100)}`);
+  }
 }
 
 // Create a direct creator upload URL
-export async function createDirectUpload(): Promise<UploadResponse> {
+export async function createDirectUpload(meta?: { name?: string }): Promise<UploadResponse> {
   return cloudflareRequest<UploadResponse>("/direct_upload", {
     method: "POST",
     body: JSON.stringify({
       maxDurationSeconds: 3600, // 1 hour max
       allowedOrigins: ["*"],
       requireSignedURLs: false,
+      meta: meta || {},
     }),
   });
 }
@@ -71,41 +95,97 @@ export async function getVideo(videoId: string): Promise<Video> {
 }
 
 // List videos
+// Cloudflare API returns: { result: Video[], success: boolean, ... }
+// The cloudflareRequest function extracts data.result || data
+// So we get the array directly
 export async function listVideos(): Promise<Video[]> {
-  const response = await cloudflareRequest<{ videos: Video[] }>("/");
-  return response.videos || [];
+  const videos = await cloudflareRequest<Video[]>("/");
+  
+  // Ensure we return an array
+  if (Array.isArray(videos)) {
+    return videos;
+  }
+  
+  // Fallback if structure is different
+  console.warn("Unexpected video list response format:", videos);
+  return [];
 }
 
-// Upload video chunk to direct upload URL
+// Delete video
+export async function deleteVideo(videoId: string): Promise<void> {
+  await cloudflareRequest<void>(`/${videoId}`, {
+    method: "DELETE",
+  });
+}
+
+// Upload video chunk to direct upload URL (server-side version using fetch)
+// According to Cloudflare docs: https://developers.cloudflare.com/stream/uploading-videos/direct-creator-uploads/
+// Basic uploads must use POST with multipart/form-data and field name "file"
 export async function uploadVideoChunk(
   uploadURL: string,
-  chunk: Blob,
+  chunk: Blob | ArrayBuffer | File,
   onProgress?: (progress: number) => void
 ): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
+  try {
+    // Convert to File or Blob for FormData
+    let file: File | Blob;
+    if (chunk instanceof File) {
+      file = chunk;
+    } else if (chunk instanceof Blob) {
+      // Convert Blob to File-like object for FormData
+      file = new File([chunk], "video.webm", { type: chunk.type || "video/webm" });
+    } else {
+      // ArrayBuffer - convert to File
+      file = new File([chunk], "video.webm", { type: "video/webm" });
+    }
+    
+    console.log("Uploading to Cloudflare:", {
+      url: uploadURL.substring(0, 100) + "...",
+      size: file.size,
+      type: file.type,
+    });
+    
+    // Create FormData with field name "file" as per Cloudflare documentation
+    const formData = new FormData();
+    formData.append("file", file);
+    
+    // Cloudflare Stream requires POST with multipart/form-data
+    // Field name must be "file" (as shown in docs: --form file=@...)
+    const response = await fetch(uploadURL, {
+      method: "POST",
+      body: formData,
+      // Don't set Content-Type header - browser/Node will set it with boundary
+    });
 
-    xhr.upload.addEventListener("progress", (e) => {
-      if (e.lengthComputable && onProgress) {
-        const progress = (e.loaded / e.total) * 100;
-        onProgress(progress);
+    console.log("Cloudflare response:", {
+      status: response.status,
+      statusText: response.statusText,
+      headers: Object.fromEntries(response.headers.entries()),
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error("Cloudflare upload error:", errorText);
+      let errorMessage = `Upload failed with status ${response.status}`;
+      try {
+        const errorData = JSON.parse(errorText);
+        errorMessage = errorData.errors?.[0]?.message || errorData.message || errorMessage;
+      } catch (e) {
+        // If parsing fails, include the raw error text
+        if (errorText) {
+          errorMessage = `${errorMessage}: ${errorText.substring(0, 200)}`;
+        }
       }
-    });
-
-    xhr.addEventListener("load", () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve();
-      } else {
-        reject(new Error(`Upload failed with status ${xhr.status}`));
-      }
-    });
-
-    xhr.addEventListener("error", () => {
-      reject(new Error("Upload failed"));
-    });
-
-    xhr.open("PUT", uploadURL);
-    xhr.send(chunk);
-  });
+      throw new Error(errorMessage);
+    }
+    
+    console.log("Upload successful");
+  } catch (error) {
+    console.error("Upload error:", error);
+    if (error instanceof Error) {
+      throw error;
+    }
+    throw new Error("Upload failed");
+  }
 }
 
