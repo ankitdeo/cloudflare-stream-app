@@ -5,7 +5,7 @@ import StreamRecorder from "@/components/streaming/StreamRecorder";
 import VideoPlayer from "@/components/player/VideoPlayer";
 import { Button } from "@/components/ui/button";
 import { Video, ListVideo, Upload, AlertCircle, Trash2 } from "lucide-react";
-import { Video as VideoType } from "@/types/stream";
+import { Video as VideoType, EmbedSettings } from "@/types/stream";
 
 type ViewMode = "record" | "playback" | "library";
 
@@ -15,6 +15,12 @@ export default function Home() {
   const [selectedVideo, setSelectedVideo] = useState<VideoType | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [embedSettings, setEmbedSettings] = useState<EmbedSettings>({
+    autoplay: false,
+    loop: false,
+    preload: "auto",
+    muted: false,
+  });
 
   const fetchVideos = async () => {
     try {
@@ -222,7 +228,76 @@ export default function Home() {
                   </Button>
                 </div>
               </div>
-              <VideoPlayer video={selectedVideo} />
+              
+              {/* Embed Settings Controls */}
+              <div className="bg-white dark:bg-gray-800 rounded-lg p-4 shadow-md">
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">
+                  Embed Settings
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+                  {/* Autoplay */}
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={embedSettings.autoplay}
+                      onChange={(e) =>
+                        setEmbedSettings({ ...embedSettings, autoplay: e.target.checked })
+                      }
+                      className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-700 dark:text-gray-300">Autoplay</span>
+                  </label>
+                  
+                  {/* Loop */}
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={embedSettings.loop}
+                      onChange={(e) =>
+                        setEmbedSettings({ ...embedSettings, loop: e.target.checked })
+                      }
+                      className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-700 dark:text-gray-300">Loop</span>
+                  </label>
+                  
+                  {/* Muted */}
+                  <label className="flex items-center space-x-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={embedSettings.muted}
+                      onChange={(e) =>
+                        setEmbedSettings({ ...embedSettings, muted: e.target.checked })
+                      }
+                      className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-700 dark:text-gray-300">Muted</span>
+                  </label>
+                  
+                  {/* Preload */}
+                  <div className="flex flex-col">
+                    <label className="text-xs text-gray-600 dark:text-gray-400 mb-1">
+                      Preload
+                    </label>
+                    <select
+                      value={embedSettings.preload}
+                      onChange={(e) =>
+                        setEmbedSettings({
+                          ...embedSettings,
+                          preload: e.target.value as "auto" | "metadata" | "none",
+                        })
+                      }
+                      className="px-3 py-1 text-sm border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-700 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    >
+                      <option value="auto">Auto</option>
+                      <option value="metadata">Metadata</option>
+                      <option value="none">None</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+              
+              <VideoPlayer video={selectedVideo} embedSettings={embedSettings} />
             </div>
           )}
 

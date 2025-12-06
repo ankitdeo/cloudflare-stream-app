@@ -118,6 +118,14 @@ export async function deleteVideo(videoId: string): Promise<void> {
   });
 }
 
+// Generate captions for a video using AI
+// Language should be in BCP 47 format (e.g., "en" for English)
+export async function generateCaptions(videoId: string, language: string = "en"): Promise<void> {
+  await cloudflareRequest<void>(`/${videoId}/captions/${language}/generate`, {
+    method: "POST",
+  });
+}
+
 // Upload video chunk to direct upload URL (server-side version using fetch)
 // According to Cloudflare docs: https://developers.cloudflare.com/stream/uploading-videos/direct-creator-uploads/
 // Basic uploads must use POST with multipart/form-data and field name "file"

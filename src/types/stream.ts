@@ -30,6 +30,7 @@ export interface Video {
   modified?: string;
   duration?: number;
   playback?: {
+    iframe?: string;
     hls?: string;
     dash?: string;
   };
@@ -53,5 +54,12 @@ export interface StreamRecorderState {
   videoId: string | null;
   error: string | null;
   progress: number;
+}
+
+export interface EmbedSettings {
+  autoplay: boolean;
+  loop: boolean;
+  preload: "auto" | "metadata" | "none";
+  muted: boolean;
 }
 

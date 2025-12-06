@@ -8,6 +8,88 @@ interface StreamRecorderProps {
   onRecordingComplete?: (videoId: string) => void;
 }
 
+// Helper function to poll video status until ready, then generate captions
+const pollVideoReadinessAndGenerateCaptions = (videoId: string): void => {
+  const maxAttempts = 60; // Poll for up to 5 minutes (60 * 5 seconds)
+  const pollInterval = 5000; // Check every 5 seconds
+  let attempts = 0;
+  let timeoutId: NodeJS.Timeout | null = null;
+
+  const checkAndGenerate = async (): Promise<void> => {
+    // Clear any pending timeout
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+
+    try {
+      attempts++;
+      console.log(`Checking video readiness (attempt ${attempts}/${maxAttempts}) for video ${videoId}`);
+
+      // Check video status
+      const statusResponse = await fetch(`/api/stream/status?videoId=${videoId}`);
+      
+      if (!statusResponse.ok) {
+        throw new Error(`Failed to check video status: ${statusResponse.status}`);
+      }
+
+      const statusResult = await statusResponse.json();
+      
+      if (statusResult.success && statusResult.data) {
+        const video = statusResult.data;
+        
+        // Check if video is ready to stream
+        if (video.readyToStream) {
+          console.log(`Video ${videoId} is ready to stream. Starting caption generation...`);
+          
+          // Generate captions
+          try {
+            const captionResponse = await fetch(`/api/videos/${videoId}/captions/generate`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ language: "en" }),
+            });
+            
+            if (captionResponse.ok) {
+              console.log(`Caption generation started for video ${videoId}`);
+            } else {
+              const captionError = await captionResponse.json().catch(() => ({}));
+              console.warn(`Caption generation failed for video ${videoId}:`, captionError.error || "Unknown error");
+            }
+          } catch (captionErr) {
+            console.warn(`Failed to trigger caption generation for video ${videoId}:`, captionErr);
+          }
+          return; // Stop polling
+        }
+        
+        // Check if video has error state
+        if (video.status?.state === "error") {
+          console.warn(`Video ${videoId} has error state. Stopping caption generation polling.`);
+          return;
+        }
+      }
+
+      // If not ready and haven't exceeded max attempts, schedule next check
+      if (attempts < maxAttempts) {
+        timeoutId = setTimeout(checkAndGenerate, pollInterval);
+      } else {
+        console.warn(`Max polling attempts reached for video ${videoId}. Caption generation not triggered.`);
+      }
+    } catch (error) {
+      console.error(`Error polling video status for ${videoId}:`, error);
+      // Retry on error (up to max attempts)
+      if (attempts < maxAttempts) {
+        timeoutId = setTimeout(checkAndGenerate, pollInterval);
+      }
+    }
+  };
+
+  // Start polling (with a small initial delay)
+  timeoutId = setTimeout(checkAndGenerate, 2000); // Wait 2 seconds before first check
+};
+
 // Helper function for uploading video through our API route (avoids CORS)
 const uploadVideoChunk = (
   uploadURL: string,
@@ -248,6 +330,10 @@ export default function StreamRecorder({
 
       setProgress(100);
       chunksRef.current = [];
+
+      // Start polling for video readiness, then generate captions
+      // This runs in the background and doesn't block the user
+      pollVideoReadinessAndGenerateCaptions(uid);
 
       if (onRecordingComplete) {
         onRecordingComplete(uid);

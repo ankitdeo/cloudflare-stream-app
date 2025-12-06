@@ -10,14 +10,16 @@ export async function GET() {
     console.log(`Retrieved ${videos.length} videos from Cloudflare`);
     
     // Enhance videos with playback URLs if not already present
-    const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
+    const customerSubdomain = process.env.CUSTOMER_SUBDOMAIN;
     const enhancedVideos: Video[] = videos.map((video) => {
-      if (!video.playback?.hls && accountId) {
+      if (customerSubdomain) {
+        const playback = video.playback || {};
         return {
           ...video,
           playback: {
-            hls: `https://customer-${accountId}.cloudflarestream.com/${video.uid}/manifest/video.m3u8`,
-            dash: `https://customer-${accountId}.cloudflarestream.com/${video.uid}/manifest/video.mpd`,
+            iframe: playback.iframe || `https://${customerSubdomain}/${video.uid}/iframe`,
+            hls: playback.hls || `https://${customerSubdomain}/${video.uid}/manifest/video.m3u8`,
+            dash: playback.dash || `https://${customerSubdomain}/${video.uid}/manifest/video.mpd`,
           },
         };
       }

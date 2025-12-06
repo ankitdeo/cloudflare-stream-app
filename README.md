@@ -47,12 +47,15 @@ A Next.js application that enables users to live stream video recordings from th
    ```env
    CLOUDFLARE_ACCOUNT_ID=your_account_id_here
    CLOUDFLARE_API_TOKEN=your_api_token_here
+   CUSTOMER_SUBDOMAIN=customer-xxxxx.cloudflarestream.com
    ```
 
    **To get your credentials**:
    - Account ID: Found in the Cloudflare Dashboard URL or in your account settings
    - API Token: Create one at https://dash.cloudflare.com/profile/api-tokens
      - Token needs: `Account:Stream:Edit` permission
+   - Customer Subdomain: Your Cloudflare Stream customer subdomain (e.g., `customer-tiwlt6poiiffxc8d.cloudflarestream.com`)
+     - Found in your video iframe URLs from Cloudflare Stream dashboard
 
 4. **Run the development server**:
    ```bash
