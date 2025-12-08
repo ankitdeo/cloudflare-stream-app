@@ -94,6 +94,7 @@ const pollVideoReadinessAndGenerateCaptions = (videoId: string): void => {
 const uploadVideoChunk = (
   uploadURL: string,
   chunk: Blob,
+  fileName?: string,
   onProgress?: (progress: number) => void
 ): Promise<void> => {
   return new Promise((resolve, reject) => {
@@ -145,7 +146,13 @@ const uploadVideoChunk = (
 
     // Upload through our API route to avoid CORS
     const formData = new FormData();
-    formData.append("file", chunk, "video.webm");
+    // Use provided filename or fallback to generic name
+    // Sanitize filename: keep alphanumeric, spaces, hyphens, underscores, but replace other special chars
+    const fileExtension = "webm";
+    const uploadFileName = fileName 
+      ? `${fileName.replace(/[^a-zA-Z0-9\s\-_]/g, '_').replace(/\s+/g, '_')}.${fileExtension}`
+      : `video.${fileExtension}`;
+    formData.append("file", chunk, uploadFileName);
     formData.append("uploadURL", uploadURL);
 
     xhr.open("POST", "/api/stream/upload");
@@ -256,6 +263,23 @@ export default function StreamRecorder({
       setIsUploading(true);
       setProgress(0);
 
+      // Generate unique video name
+      // If user provided a name, append timestamp and random string for uniqueness
+      // Otherwise, use timestamp-based default name
+      const generateUniqueVideoName = (): string => {
+        if (videoName && videoName.trim()) {
+          const now = new Date();
+          // Format: YYYYMMDD-HHMMSS
+          const timestamp = now.toISOString().replace(/[-:T.]/g, '').slice(0, 15); // YYYYMMDDHHMMSS
+          const formattedTime = `${timestamp.slice(0, 8)}-${timestamp.slice(8, 14)}`;
+          const randomStr = Math.random().toString(36).substring(2, 6); // 4 character random string
+          return `${videoName.trim()} - ${formattedTime}-${randomStr}`;
+        }
+        return `Recording ${new Date().toLocaleString()}`;
+      };
+
+      const uniqueVideoName = generateUniqueVideoName();
+
       // Call API route to get upload URL (server-side, can access env variables)
       const response = await fetch("/api/stream/create", {
         method: "POST",
@@ -265,7 +289,7 @@ export default function StreamRecorder({
         body: JSON.stringify({
           type: "direct",
           meta: {
-            name: videoName || `Recording ${new Date().toLocaleString()}`,
+            name: uniqueVideoName,
           },
         }),
       });
@@ -301,8 +325,8 @@ export default function StreamRecorder({
         uploadURL: uploadURL.substring(0, 50) + "...",
       });
 
-      // Upload the video
-      await uploadVideoChunk(uploadURL, videoBlob, (progress) => {
+      // Upload the video with the unique name
+      await uploadVideoChunk(uploadURL, videoBlob, uniqueVideoName, (progress) => {
         setProgress(progress);
       });
 
