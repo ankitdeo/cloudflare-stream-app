@@ -66,9 +66,9 @@ export async function createDirectUpload(meta?: { name?: string }): Promise<Uplo
   return cloudflareRequest<UploadResponse>("/direct_upload", {
     method: "POST",
     body: JSON.stringify({
-      maxDurationSeconds: 3600, // 1 hour max
+      maxDurationSeconds: 60, // 1 minute max
       allowedOrigins: ["*"],
-      requireSignedURLs: false,
+      requireSignedURLs: true,
       meta: meta || {},
     }),
   });
@@ -123,6 +123,44 @@ export async function deleteVideo(videoId: string): Promise<void> {
 export async function generateCaptions(videoId: string, language: string = "en"): Promise<void> {
   await cloudflareRequest<void>(`/${videoId}/captions/${language}/generate`, {
     method: "POST",
+  });
+}
+
+// Generate a signed token for video playback
+// Returns a token that can be used in playback URLs instead of the video UID
+// Format: https://customer-{CODE}.cloudflarestream.com/{TOKEN}/iframe
+export async function generateSignedToken(videoId: string): Promise<string> {
+  const response = await cloudflareRequest<{ token: string }>(`/${videoId}/token`, {
+    method: "POST",
+  });
+  
+  // The response should contain a token field
+  if (response && typeof response === 'object' && 'token' in response) {
+    return response.token;
+  }
+  
+  // Fallback: if response is just a string token
+  if (typeof response === 'string') {
+    return response;
+  }
+  
+  // If structure is different, try to extract token from result
+  const result = response as any;
+  if (result?.token) {
+    return result.token;
+  }
+  
+  throw new Error("Failed to extract token from Cloudflare response");
+}
+
+// Update an existing video to require signed URLs
+// This is useful for migrating existing videos to use secure playback
+export async function updateVideoToRequireSignedURLs(videoId: string): Promise<Video> {
+  return cloudflareRequest<Video>(`/${videoId}`, {
+    method: "PATCH",
+    body: JSON.stringify({
+      requireSignedURLs: true,
+    }),
   });
 }
 
