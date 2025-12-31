@@ -1,30 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getLiveInputStatus, getLiveInputRecordings } from "@/lib/cloudflare";
 
-/**
- * Test endpoint to manually check a live input's recording status
- * GET /api/live-inputs/[id]/recordings
- * 
- * Returns:
- * - Live input details (including recording configuration)
- * - Current status
- * - All recordings (ready and not ready)
- */
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
     const { id } = await params;
-    console.log(`[${new Date().toISOString()}] Checking recordings for live input ${id}...`);
     
-    // Get live input status
     const liveInput = await getLiveInputStatus(id);
-    
-    // Get all recordings
     const recordings = await getLiveInputRecordings(id);
     
-    // Separate ready and not-ready recordings
     const readyRecordings = recordings.filter(
       (rec) => rec.readyToStream || rec.status?.state === "ready"
     );
@@ -32,9 +18,10 @@ export async function GET(
       (rec) => !rec.readyToStream && rec.status?.state !== "ready"
     );
     
-    const response = {
+    return NextResponse.json({
       success: true,
-      data: {
+      data: recordings,
+      details: {
         liveInput: {
           uid: liveInput.uid,
           meta: liveInput.meta,
@@ -60,27 +47,15 @@ export async function GET(
         },
         timestamp: new Date().toISOString(),
       },
-    };
-    
-    console.log(`[${new Date().toISOString()}] Recording check complete:`, {
-      liveInputId: id,
-      recordingMode: liveInput.recording?.mode,
-      totalRecordings: recordings.length,
-      readyRecordings: readyRecordings.length,
     });
-    
-    return NextResponse.json(response);
   } catch (error) {
     console.error("Error checking recordings:", error);
-    const errorMessage = error instanceof Error ? error.message : "Failed to check recordings";
     return NextResponse.json(
       {
         success: false,
-        error: errorMessage,
+        error: error instanceof Error ? error.message : "Failed to check recordings",
       },
       { status: 500 }
     );
   }
 }
-
-

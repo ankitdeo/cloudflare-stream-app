@@ -10,7 +10,6 @@ export async function GET(
     const { id } = await params;
     const liveInput = await getLiveInputStatus(id);
     
-    // Convert to Video-like object for consistent API
     const customerSubdomain = process.env.CUSTOMER_SUBDOMAIN;
     const video: Video = {
       uid: liveInput.uid || id,
@@ -26,17 +25,15 @@ export async function GET(
       playback: {},
     };
     
-    // Generate iframe URL for live inputs (primary playback method)
     if (customerSubdomain && liveInput.uid) {
       video.playback = {
         iframe: `https://${customerSubdomain}/${liveInput.uid}/iframe`,
         hls: `https://${customerSubdomain}/${liveInput.uid}/manifest/video.m3u8`,
         dash: `https://${customerSubdomain}/${liveInput.uid}/manifest/video.mpd`,
-        whep: liveInput.webRTCPlayback?.url, // Keep WHEP URL available but not used for playback
+        whep: liveInput.webRTCPlayback?.url,
       };
       video.thumbnail = `https://${customerSubdomain}/${liveInput.uid}/thumbnails/thumbnail.jpg?time=1s&height=270`;
     } else {
-      // Fallback if no customer subdomain
       video.playback = {
         whep: liveInput.webRTCPlayback?.url,
       };
@@ -61,9 +58,7 @@ export async function DELETE(
 ) {
   try {
     const { id } = await params;
-    console.log(`Deleting live input: ${id}`);
     await deleteLiveInput(id);
-    console.log(`Live input ${id} deleted successfully`);
     
     return NextResponse.json({ 
       success: true, 
@@ -71,14 +66,12 @@ export async function DELETE(
     });
   } catch (error) {
     console.error("Error deleting live input:", error);
-    const errorMessage = error instanceof Error ? error.message : "Failed to delete live input";
     return NextResponse.json(
       {
         success: false,
-        error: errorMessage,
+        error: error instanceof Error ? error.message : "Failed to delete live input",
       },
       { status: 500 }
     );
   }
 }
-

@@ -39,3 +39,11 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# ignore the docs folder and all its contents
+/docs
+/docs/*
+/docs/assets
+/docs/assets/*
+/docs/diagrams
+/docs/diagrams/*
