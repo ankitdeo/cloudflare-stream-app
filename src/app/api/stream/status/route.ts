@@ -16,6 +16,10 @@ export async function GET(request: NextRequest) {
 
     if (inputId) {
       const status = await getLiveInputStatus(inputId);
+      
+      // WHEP URL is already in webRTCPlayback field from Cloudflare API
+      // No need to enhance further, just return as-is
+      
       return NextResponse.json({ success: true, data: status });
     }
 

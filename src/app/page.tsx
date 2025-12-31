@@ -4,7 +4,7 @@ import { useState, useEffect } from "react";
 import StreamRecorder from "@/components/streaming/StreamRecorder";
 import VideoPlayer from "@/components/player/VideoPlayer";
 import { Button } from "@/components/ui/button";
-import { Video, ListVideo, Upload, AlertCircle, Trash2 } from "lucide-react";
+import { Video, ListVideo, Upload, AlertCircle, Trash2, Pause, Play } from "lucide-react";
 import { Video as VideoType, EmbedSettings } from "@/types/stream";
 
 type ViewMode = "record" | "playback" | "library";
@@ -52,7 +52,6 @@ export default function Home() {
             return bDate - aDate;
           });
         
-        console.log(`Loaded ${sortedVideos.length} videos`);
         setVideos(sortedVideos);
       } else {
         setError(data.error || "Failed to fetch videos");
@@ -71,25 +70,110 @@ export default function Home() {
   }, [viewMode]);
 
   const handleRecordingComplete = (videoId: string) => {
-    // Switch to library view and refresh videos
+    // Only switch to library view for buffered uploads (not live streams)
+    // Live streams should stay on the recording view so user can continue streaming
+    // This callback is only called for buffered uploads now
     setViewMode("library");
     setTimeout(() => {
       fetchVideos();
     }, 2000); // Wait a bit for video to be processed
   };
 
+  const handlePauseResumeLiveInput = async (liveInputId: string, pause: boolean): Promise<void> => {
+    try {
+      setIsLoading(true);
+      setError(null);
+
+      const endpoint = `/api/live-inputs/${liveInputId}/${pause ? 'pause' : 'resume'}`;
+      const response = await fetch(endpoint, {
+        method: "POST",
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        // Update the selected video's paused state
+        if (selectedVideo && selectedVideo.uid === liveInputId) {
+          setSelectedVideo({
+            ...selectedVideo,
+            paused: pause,
+          });
+        }
+        // Also refresh the library to get updated status
+        await fetchVideos();
+      } else {
+        throw new Error(data.error || `Failed to ${pause ? 'pause' : 'resume'} live input`);
+      }
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : `Failed to ${pause ? 'pause' : 'resume'} live input`;
+      setError(errorMessage);
+      throw err;
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   const handleVideoSelect = async (video: VideoType) => {
     try {
       setIsLoading(true);
-      // Fetch full video details to get playback URLs
-      const response = await fetch(`/api/videos/${video.uid}`);
-      const data = await response.json();
       
-      if (data.success) {
-        setSelectedVideo(data.data);
-        setViewMode("playback");
+      // Check if this is a live input (has liveInputId or isLive flag)
+      if (video.isLive || video.liveInputId) {
+        // For live inputs, if we already have the iframe URL from the list, use it
+        // Otherwise, fetch status to get updated info
+        if (video.playback?.iframe) {
+          // Use the video object as-is since it already has the iframe URL
+          setSelectedVideo(video);
+          setViewMode("playback");
+        } else {
+          // Fallback: fetch status if iframe URL is missing
+          const inputId = video.liveInputId || video.uid;
+          const response = await fetch(`/api/stream/status?inputId=${inputId}`);
+          const data = await response.json();
+          
+          if (data.success) {
+            // Convert StreamInput to Video-like object for playback
+            const liveInput = data.data;
+            const liveInputUid = liveInput.uid || inputId;
+            
+            // Fetch the live input details which includes iframe URL
+            const liveInputResponse = await fetch(`/api/live-inputs/${liveInputUid}`);
+            const liveInputData = await liveInputResponse.json();
+            
+            if (liveInputData.success && liveInputData.data.playback?.iframe) {
+              // Use the iframe URL from the API response
+              const videoForPlayback: VideoType = {
+                uid: liveInputUid,
+                meta: liveInput.meta || liveInputData.data.meta,
+                created: liveInput.created || liveInputData.data.created,
+                modified: liveInput.modified || liveInputData.data.modified,
+                isLive: true,
+                liveInputId: liveInputUid,
+                readyToStream: true,
+                paused: liveInput.paused || liveInputData.data.paused || false,
+                playback: liveInputData.data.playback,
+                thumbnail: liveInputData.data.thumbnail,
+              };
+              setSelectedVideo(videoForPlayback);
+              setViewMode("playback");
+            } else {
+              setError("Failed to get iframe URL for live stream");
+            }
+          } else {
+            setError(data.error || "Failed to load live stream details");
+          }
+        }
       } else {
-        setError(data.error || "Failed to load video details");
+        // Regular video - fetch full video details to get playback URLs
+        const response = await fetch(`/api/videos/${video.uid}`);
+        const data = await response.json();
+        
+        if (data.success) {
+          setSelectedVideo(data.data);
+          setViewMode("playback");
+        } else {
+          setError(data.error || "Failed to load video details");
+        }
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load video");
@@ -98,15 +182,18 @@ export default function Home() {
     }
   };
 
-  const handleDeleteVideo = async (videoId: string, event?: React.MouseEvent) => {
+  const handleDeleteVideo = async (videoId: string, video?: VideoType, event?: React.MouseEvent) => {
     // Prevent event bubbling if called from card click
     if (event) {
       event.stopPropagation();
     }
 
+    // Determine if this is a live input or regular video
+    const isLiveInput = video?.isLive || video?.liveInputId;
+
     // Confirm deletion
     const confirmed = window.confirm(
-      "Are you sure you want to delete this video? This action cannot be undone."
+      `Are you sure you want to delete this ${isLiveInput ? 'live stream' : 'video'}? This action cannot be undone.`
     );
 
     if (!confirmed) return;
@@ -115,7 +202,12 @@ export default function Home() {
       setIsLoading(true);
       setError(null);
 
-      const response = await fetch(`/api/videos/${videoId}`, {
+      // Use appropriate endpoint based on type
+      const endpoint = isLiveInput 
+        ? `/api/live-inputs/${videoId}`
+        : `/api/videos/${videoId}`;
+
+      const response = await fetch(endpoint, {
         method: "DELETE",
       });
 
@@ -131,10 +223,10 @@ export default function Home() {
           setViewMode("library");
         }
       } else {
-        setError(data.error || "Failed to delete video");
+        setError(data.error || `Failed to delete ${isLiveInput ? 'live stream' : 'video'}`);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete video");
+      setError(err instanceof Error ? err.message : `Failed to delete ${isLiveInput ? 'live stream' : 'video'}`);
     } finally {
       setIsLoading(false);
     }
@@ -297,7 +389,11 @@ export default function Home() {
                 </div>
               </div>
               
-              <VideoPlayer video={selectedVideo} embedSettings={embedSettings} />
+              <VideoPlayer 
+                video={selectedVideo} 
+                embedSettings={embedSettings}
+                onPauseResume={selectedVideo.isLive ? (pause) => handlePauseResumeLiveInput(selectedVideo.uid, pause) : undefined}
+              />
             </div>
           )}
 
@@ -358,11 +454,22 @@ export default function Home() {
                         <div className="p-4">
                           <div className="flex items-center justify-between mb-1">
                             <h3 className="font-semibold text-gray-900 dark:text-white truncate flex-1">
-                              {video.meta?.name || `Video ${video.uid.slice(0, 8)}`}
+                              {video.meta?.name || (video.isLive ? `Live Stream ${video.uid.slice(0, 8)}` : `Video ${video.uid.slice(0, 8)}`)}
                             </h3>
-                            {!video.readyToStream && (
+                            {video.isLive && (
+                              <span className="ml-2 px-2 py-1 text-xs bg-red-600 text-white rounded flex items-center gap-1">
+                                <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse"></span>
+                                LIVE
+                              </span>
+                            )}
+                            {!video.isLive && !video.readyToStream && (
                               <span className="ml-2 px-2 py-1 text-xs bg-yellow-100 dark:bg-yellow-900/30 text-yellow-800 dark:text-yellow-300 rounded">
                                 Processing
+                              </span>
+                            )}
+                            {!video.isLive && video.readyToStream && (
+                              <span className="ml-2 px-2 py-1 text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-800 dark:text-blue-300 rounded">
+                                Recorded
                               </span>
                             )}
                           </div>
@@ -382,7 +489,7 @@ export default function Home() {
                         <Button
                           variant="destructive"
                           size="sm"
-                          onClick={(e) => handleDeleteVideo(video.uid, e)}
+                          onClick={(e) => handleDeleteVideo(video.uid, video, e)}
                           disabled={isLoading}
                           className="w-full"
                         >
