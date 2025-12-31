@@ -3,11 +3,162 @@
 import { useState, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Video, Upload, Square, AlertCircle } from "lucide-react";
-import { createDirectUpload, uploadVideoChunk } from "@/lib/cloudflare";
 
 interface StreamRecorderProps {
   onRecordingComplete?: (videoId: string) => void;
 }
+
+// Helper function to poll video status until ready, then generate captions
+const pollVideoReadinessAndGenerateCaptions = (videoId: string): void => {
+  const maxAttempts = 60; // Poll for up to 5 minutes (60 * 5 seconds)
+  const pollInterval = 5000; // Check every 5 seconds
+  let attempts = 0;
+  let timeoutId: NodeJS.Timeout | null = null;
+
+  const checkAndGenerate = async (): Promise<void> => {
+    // Clear any pending timeout
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+      timeoutId = null;
+    }
+
+    try {
+      attempts++;
+      console.log(`Checking video readiness (attempt ${attempts}/${maxAttempts}) for video ${videoId}`);
+
+      // Check video status
+      const statusResponse = await fetch(`/api/stream/status?videoId=${videoId}`);
+      
+      if (!statusResponse.ok) {
+        throw new Error(`Failed to check video status: ${statusResponse.status}`);
+      }
+
+      const statusResult = await statusResponse.json();
+      
+      if (statusResult.success && statusResult.data) {
+        const video = statusResult.data;
+        
+        // Check if video is ready to stream
+        if (video.readyToStream) {
+          console.log(`Video ${videoId} is ready to stream. Starting caption generation...`);
+          
+          // Generate captions
+          try {
+            const captionResponse = await fetch(`/api/videos/${videoId}/captions/generate`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({ language: "en" }),
+            });
+            
+            if (captionResponse.ok) {
+              console.log(`Caption generation started for video ${videoId}`);
+            } else {
+              const captionError = await captionResponse.json().catch(() => ({}));
+              console.warn(`Caption generation failed for video ${videoId}:`, captionError.error || "Unknown error");
+            }
+          } catch (captionErr) {
+            console.warn(`Failed to trigger caption generation for video ${videoId}:`, captionErr);
+          }
+          return; // Stop polling
+        }
+        
+        // Check if video has error state
+        if (video.status?.state === "error") {
+          console.warn(`Video ${videoId} has error state. Stopping caption generation polling.`);
+          return;
+        }
+      }
+
+      // If not ready and haven't exceeded max attempts, schedule next check
+      if (attempts < maxAttempts) {
+        timeoutId = setTimeout(checkAndGenerate, pollInterval);
+      } else {
+        console.warn(`Max polling attempts reached for video ${videoId}. Caption generation not triggered.`);
+      }
+    } catch (error) {
+      console.error(`Error polling video status for ${videoId}:`, error);
+      // Retry on error (up to max attempts)
+      if (attempts < maxAttempts) {
+        timeoutId = setTimeout(checkAndGenerate, pollInterval);
+      }
+    }
+  };
+
+  // Start polling (with a small initial delay)
+  timeoutId = setTimeout(checkAndGenerate, 2000); // Wait 2 seconds before first check
+};
+
+// Helper function for uploading video through our API route (avoids CORS)
+const uploadVideoChunk = (
+  uploadURL: string,
+  chunk: Blob,
+  fileName?: string,
+  onProgress?: (progress: number) => void
+): Promise<void> => {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+
+    xhr.upload.addEventListener("progress", (e) => {
+      if (e.lengthComputable && onProgress) {
+        const progress = (e.loaded / e.total) * 100;
+        onProgress(progress);
+      }
+    });
+
+    xhr.addEventListener("load", () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const response = JSON.parse(xhr.responseText);
+          if (response.success) {
+            resolve();
+          } else {
+            reject(new Error(response.error || "Upload failed"));
+          }
+        } catch (e) {
+          // If response is not JSON, assume success for 2xx status
+          resolve();
+        }
+      } else {
+        // Try to get error message from response
+        let errorMessage = `Upload failed with status ${xhr.status}`;
+        try {
+          const responseText = xhr.responseText;
+          if (responseText) {
+            const errorData = JSON.parse(responseText);
+            errorMessage = errorData.error || errorData.message || errorMessage;
+          }
+        } catch (e) {
+          // If parsing fails, use default message
+        }
+        reject(new Error(errorMessage));
+      }
+    });
+
+    xhr.addEventListener("error", () => {
+      reject(new Error("Network error during upload"));
+    });
+
+    xhr.addEventListener("abort", () => {
+      reject(new Error("Upload was aborted"));
+    });
+
+    // Upload through our API route to avoid CORS
+    const formData = new FormData();
+    // Use provided filename or fallback to generic name
+    // Sanitize filename: keep alphanumeric, spaces, hyphens, underscores, but replace other special chars
+    const fileExtension = "webm";
+    const uploadFileName = fileName 
+      ? `${fileName.replace(/[^a-zA-Z0-9\s\-_]/g, '_').replace(/\s+/g, '_')}.${fileExtension}`
+      : `video.${fileExtension}`;
+    formData.append("file", chunk, uploadFileName);
+    formData.append("uploadURL", uploadURL);
+
+    xhr.open("POST", "/api/stream/upload");
+    xhr.send(formData);
+  });
+};
 
 export default function StreamRecorder({
   onRecordingComplete,
@@ -17,6 +168,7 @@ export default function StreamRecorder({
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [videoId, setVideoId] = useState<string | null>(null);
+  const [videoName, setVideoName] = useState("");
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -63,10 +215,16 @@ export default function StreamRecorder({
       recorder.ondataavailable = (event) => {
         if (event.data && event.data.size > 0) {
           chunksRef.current.push(event.data);
+          console.log("Chunk received:", event.data.size, "bytes. Total chunks:", chunksRef.current.length);
         }
       };
 
       recorder.onstop = async () => {
+        // Request any remaining data
+        if (recorderRef.current && recorderRef.current.state === "inactive") {
+          // Small delay to ensure all data is collected
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
         // Upload the recorded video
         await uploadRecording();
       };
@@ -83,6 +241,8 @@ export default function StreamRecorder({
 
   const stopRecording = useCallback(() => {
     if (recorderRef.current && recorderRef.current.state !== "inactive") {
+      // Request final data chunk before stopping
+      recorderRef.current.requestData();
       recorderRef.current.stop();
       setIsRecording(false);
     }
@@ -103,9 +263,44 @@ export default function StreamRecorder({
       setIsUploading(true);
       setProgress(0);
 
-      // Create direct upload URL
-      const uploadData = await createDirectUpload();
-      const { uploadURL, uid } = uploadData;
+      // Generate unique video name
+      // If user provided a name, append timestamp and random string for uniqueness
+      // Otherwise, use timestamp-based default name
+      const generateUniqueVideoName = (): string => {
+        if (videoName && videoName.trim()) {
+          const now = new Date();
+          // Format: YYYYMMDD-HHMMSS
+          const timestamp = now.toISOString().replace(/[-:T.]/g, '').slice(0, 15); // YYYYMMDDHHMMSS
+          const formattedTime = `${timestamp.slice(0, 8)}-${timestamp.slice(8, 14)}`;
+          const randomStr = Math.random().toString(36).substring(2, 6); // 4 character random string
+          return `${videoName.trim()} - ${formattedTime}-${randomStr}`;
+        }
+        return `Recording ${new Date().toLocaleString()}`;
+      };
+
+      const uniqueVideoName = generateUniqueVideoName();
+
+      // Call API route to get upload URL (server-side, can access env variables)
+      const response = await fetch("/api/stream/create", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          type: "direct",
+          meta: {
+            name: uniqueVideoName,
+          },
+        }),
+      });
+
+      const result = await response.json();
+
+      if (!result.success) {
+        throw new Error(result.error || "Failed to get upload URL");
+      }
+
+      const { uploadURL, uid } = result.data;
 
       if (!uploadURL) {
         throw new Error("Failed to get upload URL");
@@ -118,13 +313,51 @@ export default function StreamRecorder({
         type: "video/webm",
       });
 
-      // Upload the video
-      await uploadVideoChunk(uploadURL, videoBlob, (progress) => {
+      // Check if video blob is empty
+      if (videoBlob.size === 0) {
+        throw new Error("No video data recorded. Please record a video before uploading.");
+      }
+
+      console.log("Uploading video:", {
+        size: videoBlob.size,
+        type: videoBlob.type,
+        chunks: chunksRef.current.length,
+        uploadURL: uploadURL.substring(0, 50) + "...",
+      });
+
+      // Upload the video with the unique name
+      await uploadVideoChunk(uploadURL, videoBlob, uniqueVideoName, (progress) => {
         setProgress(progress);
       });
 
+      console.log("Upload completed successfully");
+
+      // Check video status after upload
+      try {
+        const statusResponse = await fetch(`/api/stream/status?videoId=${uid}`);
+        const statusResult = await statusResponse.json();
+        
+        if (statusResult.success && statusResult.data) {
+          const video = statusResult.data;
+          console.log("Video status:", video.status);
+          
+          if (video.status?.state === "error") {
+            const errorCode = video.status.errReasonCode || "UNKNOWN";
+            const errorText = video.status.errReasonText || "Unknown error";
+            throw new Error(`Video processing failed: ${errorCode} - ${errorText}`);
+          }
+        }
+      } catch (statusErr) {
+        // Don't fail the upload if status check fails, just log it
+        console.warn("Could not check video status:", statusErr);
+      }
+
       setProgress(100);
       chunksRef.current = [];
+
+      // Start polling for video readiness, then generate captions
+      // This runs in the background and doesn't block the user
+      pollVideoReadinessAndGenerateCaptions(uid);
 
       if (onRecordingComplete) {
         onRecordingComplete(uid);
@@ -157,6 +390,22 @@ export default function StreamRecorder({
             </div>
           </div>
         )}
+      </div>
+
+      {/* Video Name Input */}
+      <div className="space-y-2">
+        <label htmlFor="video-name" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+          Video Name (optional)
+        </label>
+        <input
+          id="video-name"
+          type="text"
+          value={videoName}
+          onChange={(e) => setVideoName(e.target.value)}
+          placeholder="Enter a name for your video"
+          disabled={isRecording || isUploading}
+          className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-md bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-50 disabled:cursor-not-allowed"
+        />
       </div>
 
       <div className="flex items-center justify-center gap-4">
